@@ -2,9 +2,14 @@
 Dashboard Chat API
 POST /chat/{session_id}  — send a message, get a response that may modify the dashboard spec
 
-Uses the unified LLM client (Gemini → Groq fallback).
-Single LLM call per message — classify + act in one shot to minimise quota usage.
-Falls back to disk when session is not in memory (handles server restarts).
+Memory system:
+  - Short-term: last 4 exchanges verbatim (immediate coherence)
+  - Rolling summary: updated every 4 turns via LLM (llama-3.1-8b, fast)
+  - Entity memory: key facts extracted and accumulated
+
+Single LLM call per user message — classify + act in one shot.
+Gemini → Groq multi-model fallback via unified client.
+Falls back to disk when session not in memory (handles server restarts).
 """
 
 from __future__ import annotations
@@ -18,7 +23,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.agents.orchestrator import SESSION_DIR, get_session
-from backend.llm.client import llm_json, llm_call
+from backend.chat.memory import get_memory, update_memory_after_turn
+from backend.llm.client import llm_json
 
 router = APIRouter()
 
@@ -30,7 +36,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     updated_spec: dict | None = None
-    action: str = "none"   # "none" | "updated_dashboard" | "answered_question"
+    action: str = "none"
+    memory_snapshot: dict | None = None   # optional debug info
 
 
 # ── Route ─────────────────────────────────────────────────────────────────────
@@ -38,7 +45,6 @@ class ChatResponse(BaseModel):
 @router.post("/chat/{session_id}")
 async def chat(session_id: str, req: ChatRequest) -> ChatResponse:
     spec, session = _load_spec(session_id)
-
     if spec is None:
         raise HTTPException(
             status_code=404,
@@ -48,10 +54,13 @@ async def chat(session_id: str, req: ChatRequest) -> ChatResponse:
             ),
         )
 
+    memory       = get_memory(session_id)
     spec_summary = _summarise_spec(spec)
 
     try:
-        reply, updated_spec = _process_chat(req.message, spec_summary, spec)
+        reply, updated_spec, action = _process_chat(
+            req.message, spec_summary, spec, memory
+        )
     except Exception as e:
         err = str(e)
         if "quota" in err.lower() or "exhausted" in err.lower() or "rate" in err.lower():
@@ -61,6 +70,10 @@ async def chat(session_id: str, req: ChatRequest) -> ChatResponse:
             )
         raise HTTPException(status_code=500, detail=f"LLM error: {err[:200]}")
 
+    # Update memory (persists to disk, may trigger background summarisation)
+    update_memory_after_turn(memory, req.message, reply, action, spec_summary)
+
+    # Persist updated spec if dashboard was modified
     if updated_spec:
         if session:
             session.dashboard_spec = updated_spec
@@ -71,15 +84,115 @@ async def chat(session_id: str, req: ChatRequest) -> ChatResponse:
             with open(spec_path, "w", encoding="utf-8") as f:
                 json.dump(updated_spec, f, indent=2, default=str)
 
-        return ChatResponse(reply=reply, updated_spec=updated_spec, action="updated_dashboard")
+        return ChatResponse(
+            reply=reply,
+            updated_spec=updated_spec,
+            action="updated_dashboard",
+        )
 
-    return ChatResponse(reply=reply, action="answered_question")
+    return ChatResponse(reply=reply, action=action)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── GET memory snapshot (debug / frontend display) ────────────────────────────
+
+@router.get("/chat/{session_id}/memory")
+async def get_memory_snapshot(session_id: str):
+    memory = get_memory(session_id)
+    return {
+        "turn_count":  memory.turn_count,
+        "summary":     memory.summary,
+        "entities":    memory.entities,
+        "recent_turns": [t.to_dict() for t in memory.short_term],
+    }
+
+
+# ── Core LLM processing ───────────────────────────────────────────────────────
+
+def _process_chat(
+    message: str,
+    spec_summary: str,
+    full_spec: dict,
+    memory,
+) -> tuple[str, dict | None, str]:
+    """
+    Single LLM call that classifies intent + acts.
+    Memory context is injected into the prompt.
+    Returns: (reply, updated_spec_or_None, action_str)
+    """
+
+    memory_context = memory.context_block()
+
+    prompt = f"""You are a BI dashboard assistant with memory of this conversation.
+
+{f'CONVERSATION MEMORY:{chr(10)}{memory_context}{chr(10)}' if memory_context else ''}
+CURRENT DASHBOARD:
+{spec_summary}
+
+USER MESSAGE: "{message}"
+
+Decide what to do and respond with a JSON object.
+
+If the user is asking a QUESTION (wants to understand data, follow up on something, etc.):
+{{
+  "intent": "question",
+  "reply": "<answer under 120 words — reference specific numbers, and acknowledge prior context if relevant>"
+}}
+
+If the user wants to MODIFY the dashboard (add/remove/change/rename):
+{{
+  "intent": "modify",
+  "action": "add_insight_card" | "rename_tab" | "remove_section" | "reorder_tabs" | "unsupported",
+  "target_tab_id": "<tab id or null>",
+  "params": {{
+    // add_insight_card: "text" (use real numbers from dashboard), "recommendation", "severity"
+    // rename_tab: "old_label", "new_label"
+    // remove_section: "title" (partial match), "section_type"
+    // reorder_tabs: "order" (list of tab ids)
+  }},
+  "reply": "<one sentence confirming the change>"
+}}
+
+Rules:
+- Use memory context to give continuity (e.g. if user previously asked about UK, acknowledge it)
+- For add_insight_card: write specific text using ACTUAL numbers from the dashboard
+- If unsure of intent, classify as "question"
+- Return ONLY the JSON object
+"""
+
+    result = llm_json(
+        prompt,
+        task="json",
+        system="You are a BI dashboard assistant with persistent memory. Return only valid JSON.",
+        temperature=0.1,
+        max_tokens=1024,
+    )
+
+    intent = result.get("intent", "question")
+    reply  = result.get("reply", "")
+
+    if intent == "modify":
+        action_type = result.get("action", "unsupported")
+        if action_type == "unsupported":
+            return (
+                result.get("reply",
+                    "I can't make that change automatically. "
+                    "Supported: add insight card, rename tab, remove section, reorder tabs."),
+                None,
+                "answered_question",
+            )
+
+        updated_spec, err = _apply_patch(full_spec, result)
+        if err:
+            return err, None, "answered_question"
+
+        return reply or "Dashboard updated.", updated_spec, "updated_dashboard"
+
+    return reply or "I couldn't generate an answer. Please try rephrasing.", None, "answered_question"
+
+
+# ── Spec helpers ──────────────────────────────────────────────────────────────
 
 def _load_spec(session_id: str) -> tuple[dict | None, object | None]:
-    """In-memory first, then disk fallback."""
     session = get_session(session_id)
     if session and session.dashboard_spec:
         return session.dashboard_spec, session
@@ -93,9 +206,7 @@ def _load_spec(session_id: str) -> tuple[dict | None, object | None]:
 
 
 def _summarise_spec(spec: dict) -> str:
-    """Compact plain-text summary of the dashboard — no unicode arrows, no plotly data."""
     lines = [f"Dashboard: {spec.get('title', 'Unknown')}"]
-
     for tab in spec.get("tabs", []):
         lines.append(f"\nTab [{tab.get('id')}]: {tab['label']}")
         for section in tab.get("sections", []):
@@ -138,82 +249,10 @@ def _summarise_section(section: dict, lines: list, indent: int):
         lines.append(f"{pad}- table: {section.get('title', '')} (segments: {segs})")
 
 
-# ── Single-call LLM processing ────────────────────────────────────────────────
-
-def _process_chat(
-    message: str, spec_summary: str, full_spec: dict
-) -> tuple[str, dict | None]:
-    """
-    Single LLM call that both classifies intent and acts.
-    Returns (reply_text, updated_spec_or_None).
-    """
-
-    prompt = f"""You are a BI dashboard assistant.
-
-CURRENT DASHBOARD:
-{spec_summary}
-
-USER MESSAGE: "{message}"
-
-Decide what to do and respond with a JSON object:
-
-If the user is asking a QUESTION (wants to understand the data):
-{{
-  "intent": "question",
-  "reply": "<concise answer under 100 words, cite specific numbers from the dashboard>"
-}}
-
-If the user wants to MODIFY the dashboard (add/remove/change/rename):
-{{
-  "intent": "modify",
-  "action": "add_insight_card" | "rename_tab" | "remove_section" | "reorder_tabs" | "unsupported",
-  "target_tab_id": "<tab id or null>",
-  "params": {{
-    // For add_insight_card: "text", "recommendation", "severity" (high/medium/low)
-    // For rename_tab: "old_label", "new_label"
-    // For remove_section: "title" (partial match ok), "section_type"
-    // For reorder_tabs: "order" (list of tab ids)
-    // For unsupported: omit params
-  }},
-  "reply": "<one sentence confirming or explaining the change>"
-}}
-
-Rules:
-- Return ONLY the JSON object, nothing else
-- For add_insight_card, write specific text using the actual data from the dashboard summary
-- If unsure of intent, classify as "question"
-"""
-
-    result = llm_json(
-        prompt,
-        task="json",
-        system="You are a BI dashboard assistant. Return only valid JSON.",
-        temperature=0.1,
-        max_tokens=1024,
-    )
-
-    intent = result.get("intent", "question")
-    reply  = result.get("reply", "")
-
-    if intent == "modify":
-        action = result.get("action", "unsupported")
-        if action == "unsupported":
-            return result.get("reply", "I can't make that change automatically. Try: add an insight card, rename a tab, or remove a chart."), None
-
-        updated_spec, err = _apply_patch(full_spec, result)
-        if err:
-            return err, None
-        return reply or "Dashboard updated.", updated_spec
-
-    # question
-    return reply or "I couldn't generate an answer. Please try rephrasing.", None
-
-
 # ── Patch applicator ──────────────────────────────────────────────────────────
 
 def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
-    """Apply a structured patch to the spec. Returns (updated_spec, error_or_None)."""
-    spec = copy.deepcopy(spec)
+    spec           = copy.deepcopy(spec)
     action         = patch.get("action", "unsupported")
     params         = patch.get("params", {}) or {}
     target_tab_id  = patch.get("target_tab_id")
@@ -225,7 +264,6 @@ def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
                     return t
         return spec["tabs"][0] if spec.get("tabs") else None
 
-    # ── add_insight_card ──────────────────────────────────────────────────────
     if action == "add_insight_card":
         text = params.get("text", "")
         if not text:
@@ -234,20 +272,19 @@ def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
         if not tab:
             return spec, "No tab found to add the insight card to."
         card = {
-            "section_type": "insight_card",
-            "severity": params.get("severity", "medium"),
-            "text": text,
+            "section_type":  "insight_card",
+            "severity":      params.get("severity", "medium"),
+            "text":          text,
             "recommendation": params.get("recommendation", ""),
         }
         tab["sections"].insert(0, card)
         spec.setdefault("all_insights", []).insert(0, {
-            "text": text,
+            "text":           text,
             "recommendation": params.get("recommendation", ""),
-            "severity": params.get("severity", "medium"),
+            "severity":       params.get("severity", "medium"),
         })
         return spec, None
 
-    # ── rename_tab ────────────────────────────────────────────────────────────
     elif action == "rename_tab":
         old_label = params.get("old_label", "")
         new_label = params.get("new_label", "")
@@ -260,7 +297,6 @@ def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
                 return spec, None
         return spec, f"Couldn't find a tab named '{old_label}'."
 
-    # ── remove_section ────────────────────────────────────────────────────────
     elif action == "remove_section":
         section_title = params.get("title", "").lower()
         section_type  = params.get("section_type", "").lower()
@@ -279,7 +315,6 @@ def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
             return spec, "Couldn't find the section to remove. Try being more specific."
         return spec, None
 
-    # ── reorder_tabs ──────────────────────────────────────────────────────────
     elif action == "reorder_tabs":
         order = params.get("order", [])
         if order:
@@ -292,8 +327,7 @@ def _apply_patch(spec: dict, patch: dict) -> tuple[dict, str | None]:
             spec["tabs"] = reordered
         return spec, None
 
-    else:
-        return spec, (
-            "I understood your request but can't apply that change automatically. "
-            "Supported changes: add insight card, rename tab, remove chart/section, reorder tabs."
-        )
+    return spec, (
+        "I understood your request but can't apply that change automatically. "
+        "Try: add insight card, rename tab, remove section, reorder tabs."
+    )

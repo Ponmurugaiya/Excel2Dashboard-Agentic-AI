@@ -113,7 +113,9 @@ class StrategistAgent(BaseAgent):
             ctx["total_rows"] = sheet_profile["row_count"]
 
             for col, stats in sheet_profile["columns"].items():
-                col_lower = col.lower()
+                # Normalise: strip spaces + underscores, lowercase
+                # "Customer ID" → "customerid", "InvoiceDate" → "invoicedate"
+                col_norm = col.lower().replace(" ", "").replace("_", "")
                 ctx["columns"].append({"name": col, "type": stats["type"]})
 
                 if stats["type"] == "datetime":
@@ -123,37 +125,55 @@ class StrategistAgent(BaseAgent):
 
                 if stats["type"] in ("number", "integer"):
                     for kw in ["price", "revenue", "amount", "total", "sales", "cost", "value"]:
-                        if kw in col_lower:
+                        if kw in col_norm:
                             ctx["has_revenue"] = True
                             if not ctx["value_col"]:
                                 ctx["value_col"] = col
-                    for kw in ["quantity", "qty", "units", "count"]:
-                        if kw in col_lower:
+                    for kw in ["quantity", "qty", "units"]:
+                        if kw in col_norm:
                             ctx["has_quantity"] = True
+                    # Numeric transaction IDs (e.g. Invoice as int64)
+                    if stats.get("is_id"):
+                        for kw in ["invoiceno", "invoice", "orderid", "transactionid", "orderno"]:
+                            if kw in col_norm:
+                                ctx["has_transaction_id"] = True
+                                ctx["transaction_col"] = col
+                                break
 
-                if stats["type"] == "string":
-                    for kw in ["customerid", "customer_id", "userid", "user_id", "patientid", "employeeid"]:
-                        if kw in col_lower:
+                if stats["type"] == "string" or stats.get("is_id"):
+                    # Entity ID detection — works for both string and numeric IDs
+                    for kw in ["customerid", "userid", "patientid", "employeeid", "clientid"]:
+                        if kw in col_norm:
                             ctx["has_entity_id"] = True
                             ctx["entity_col"] = col
-                    for kw in ["invoiceno", "invoice_no", "order_id", "orderid", "transactionid"]:
-                        if kw in col_lower:
+                            break
+                    # Transaction ID detection
+                    for kw in ["invoiceno", "invoice", "orderid", "transactionid", "orderno"]:
+                        if kw in col_norm:
                             ctx["has_transaction_id"] = True
                             ctx["transaction_col"] = col
+                            break
+
+                if stats["type"] == "string":
+                    # Geography detection
                     for kw in ["country", "region", "state", "city", "location", "territory"]:
-                        if kw in col_lower:
+                        if kw in col_norm:
                             if stats.get("unique", 999) < 200:
                                 ctx["has_geography"] = True
                                 ctx["geo_col"] = col
-                    for kw in ["description", "product", "category", "item", "sku", "name", "type"]:
-                        if kw in col_lower:
+                            break
+                    # Category/product detection
+                    for kw in ["description", "product", "category", "item", "sku", "name"]:
+                        if kw in col_norm:
                             if stats.get("unique", 0) > 1:
                                 ctx["has_category"] = True
                                 ctx["category_col"] = col
+                            break
 
-                # Also check if derived TotalPrice is available
+                # Also check derived columns (e.g. TotalPrice added by Cleaner)
                 if col in cleaning_report.get("derived_columns", []):
-                    if col.lower() in ("totalprice", "total_price"):
+                    col_norm2 = col.lower().replace(" ", "").replace("_", "")
+                    if col_norm2 in ("totalprice", "totalrevenue", "totalamount"):
                         ctx["has_revenue"] = True
                         ctx["value_col"] = col
 
@@ -188,12 +208,13 @@ RULES:
 - Only propose tasks where the required columns actually exist
 - Always include a "kpi" task for headline numbers
 - Always include "time_series" if a datetime + numeric value column exist
-- Include "rfm" ONLY if entity_id + datetime + transaction_id + value all exist
-- Include "cohort" ONLY if entity_id + datetime exist AND total_rows > 1000
+- Include "rfm" ONLY if entity_id + datetime + transaction_id + value all exist AND total_rows >= 20
+- Include "cohort" ONLY if entity_id + datetime exist AND total_rows >= 30
 - Include "ranking" for any high-cardinality string + numeric value combination
 - Include "geo" only if a geography column exists
 - Maximum 6 tasks total
 - Prioritise tasks that answer "how is the business performing?" first
+- Do NOT skip RFM or cohort just because the dataset is small — they are valuable even on sample data
 
 Return a JSON array of task objects. Nothing else.
 """
@@ -270,7 +291,7 @@ Return a JSON array of task objects. Nothing else.
                 priority=2,
             ))
 
-        if ctx["has_entity_id"] and ctx["has_datetime"] and ctx["total_rows"] > 1000:
+        if ctx["has_entity_id"] and ctx["has_datetime"] and ctx["total_rows"] >= 30:
             tasks.append(AnalysisTask(
                 id="cohort_retention",
                 name="Customer Cohort Retention",

@@ -145,8 +145,9 @@ class QualityAgent(BaseAgent):
             y = data.get("y", [])
             if len(x) < 2:
                 return "reject", 0.0, "Less than 2 time periods — not a meaningful trend", ""
-            if len(x) < 6:
-                return "flag", 0.5, f"Only {len(x)} time periods — trend may not be reliable", ""
+            # Flag for very short series, but don't reject — sample data is still useful
+            if len(x) < 3:
+                return "flag", 0.5, f"Only {len(x)} time periods — trend is very limited", ""
             non_zero = sum(1 for v in y if v and v != 0)
             if non_zero < len(y) * 0.5:
                 return "flag", 0.6, "More than 50% of periods have zero values", ""
@@ -174,15 +175,20 @@ class QualityAgent(BaseAgent):
             score_dist = data.get("score_distribution", {})
             if not records:
                 return "reject", 0.0, "No customer records in RFM result", ""
-            if len(records) < 10:
-                return "flag", 0.5, f"Only {len(records)} customers — segmentation may not be meaningful", ""
-            # Check skew: if std is very low relative to range, scoring is degenerate
+            # Flag (not reject) for small customer counts — still useful as sample data
+            if len(records) < 5:
+                return "reject", 0.0, f"Only {len(records)} customers — too few for segmentation", ""
+            if len(records) < 20:
+                return "flag", 0.6, f"Only {len(records)} customers — segmentation is indicative only on sample data", ""
             std = score_dist.get("std", 1)
             rng = (score_dist.get("max", 12) - score_dist.get("min", 3)) or 1
             if std < rng * 0.1:
-                return "flag", 0.6,
-                "RFM scores are tightly clustered — segment separation may be weak", \
-                "Consider adjusting scoring thresholds"
+                return (
+                    "flag",
+                    0.6,
+                    "RFM scores are tightly clustered — segment separation may be weak",
+                    "Consider adjusting scoring thresholds",
+                )
             return "accept", 0.85, "", ""
 
         # ── Cohort ────────────────────────────────────────────────────────────
@@ -190,16 +196,23 @@ class QualityAgent(BaseAgent):
             matrix = data.get("matrix", [])
             if not matrix:
                 return "reject", 0.0, "Empty cohort matrix", ""
-            # Count non-null cells
-            total = sum(len(row) for row in matrix)
+            total  = sum(len(row) for row in matrix)
             filled = sum(1 for row in matrix for v in row if v is not None)
             fill_rate = filled / total if total else 0
-            if fill_rate < 0.2:
+            # For small datasets the matrix will naturally be sparse — lower threshold
+            if fill_rate < 0.05:
                 return (
                     "flag",
                     0.5,
-                    f"Cohort matrix is {100-fill_rate*100:.0f}% empty — low repeat purchase rate",
-                    "Include with caveat that retention is sparse",
+                    f"Cohort matrix is {100-fill_rate*100:.0f}% empty — very low repeat purchase rate",
+                    "Include with caveat that retention data is sparse",
+                )
+            if fill_rate < 0.3:
+                return (
+                    "flag",
+                    0.65,
+                    f"Cohort matrix is sparse ({fill_rate*100:.0f}% filled) — typical for small or sample datasets",
+                    "",
                 )
             return "accept", 0.8, "", ""
 
