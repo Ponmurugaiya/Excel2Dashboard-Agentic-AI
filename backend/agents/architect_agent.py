@@ -356,19 +356,30 @@ Return ONLY the JSON array.
                     )
 
             elif rt == "heatmap":
-                matrix = data.get("matrix", [])
+                matrix   = data.get("matrix", [])
                 x_labels = data.get("x_labels", [])
                 y_labels = data.get("y_labels", [])
 
-                # Convert None to 0 for display
-                z = [[v if v is not None else 0 for v in row] for row in matrix]
+                # Keep None as None — Plotly renders missing cells as blank/grey,
+                # which is correct for cohort periods that haven't happened yet.
+                # Do NOT replace None with 0 — 0% retention and "no data" are different.
+                z = [[v for v in row] for row in matrix]
+
+                # Annotation text: show percentage for real values, blank for None
+                text = [
+                    [f"{v*100:.0f}%" if v is not None else "" for v in row]
+                    for row in matrix
+                ]
+
+                # Dynamic x-axis title based on content
+                x_title = data.get("x_axis_label", "Months Since First Purchase")
 
                 fig = go.Figure(data=go.Heatmap(
                     z=z,
                     x=x_labels,
                     y=y_labels,
                     colorscale="Blues",
-                    text=[[f"{v*100:.0f}%" if v else "" for v in row] for row in matrix],
+                    text=text,
                     texttemplate="%{text}",
                     showscale=True,
                     zmin=0,
@@ -376,8 +387,10 @@ Return ONLY the JSON array.
                 ))
                 fig.update_layout(
                     title=data.get("title", result.title),
-                    xaxis_title="Months Since First Purchase",
+                    xaxis_title=x_title,
                     yaxis_title="Cohort",
+                    # Auto-expand height based on number of cohort rows
+                    height=max(300, min(80 * len(y_labels) + 100, 700)),
                 )
 
             elif rt == "table":
@@ -431,10 +444,10 @@ Return ONLY the JSON array.
 
         elif result.data.get("result_type") == "heatmap":
             item["section_type"] = "heatmap"
+            # chart_spec may be None if build failed — frontend null-guards this
             item["chart_spec"] = result.chart_spec
-            item["matrix"] = result.data.get("matrix", [])
-            item["x_labels"] = result.data.get("x_labels", [])
-            item["y_labels"] = result.data.get("y_labels", [])
+            # row_count drives dynamic height in the frontend
+            item["row_count"] = len(result.data.get("y_labels", []))
 
         else:
             item["chart_spec"] = result.chart_spec

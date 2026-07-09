@@ -131,31 +131,48 @@ function SectionRenderer({ section, sessionId, downloads }) {
 // ── Chart / Heatmap section ───────────────────────────────────────────────────
 
 function ChartSection({ section }) {
-  const { title, chart_spec, insight, caveat } = section;
+  const { title, chart_spec, insight, caveat, section_type, row_count } = section;
 
   if (!chart_spec?.data) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-6 text-sm text-gray-400">
-        No chart data for "{title}"
+        No chart data for &ldquo;{title}&rdquo;
       </div>
     );
   }
 
+  // Heatmaps need more vertical space when there are many cohort rows
+  const isHeatmap = section_type === "heatmap";
+  const rows      = row_count || (chart_spec.layout?.height ? null : null);
+  const chartHeight = isHeatmap
+    ? `${Math.max(300, Math.min((rows || 8) * 48 + 120, 600))}px`
+    : "320px";
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Visible section title above the chart */}
+      {title && (
+        <div className="px-4 pt-4 pb-0">
+          <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
+        </div>
+      )}
       <Suspense fallback={PlotFallback}>
         <Plot
           data={chart_spec.data}
           layout={{
             ...chart_spec.layout,
+            // Strip the title from the Plotly layout since we render it above
+            title: undefined,
             autosize: true,
-            margin: { l: 50, r: 20, t: 50, b: 50 },
+            margin: isHeatmap
+              ? { l: 80, r: 40, t: 20, b: 60 }
+              : { l: 50, r: 20, t: 20, b: 50 },
             paper_bgcolor: "transparent",
-            plot_bgcolor: "transparent",
+            plot_bgcolor:  "transparent",
             font: { family: "Inter, sans-serif", size: 12 },
           }}
           config={{ responsive: true, displayModeBar: false }}
-          style={{ width: "100%", height: "320px" }}
+          style={{ width: "100%", height: chartHeight }}
           useResizeHandler
         />
       </Suspense>
@@ -184,13 +201,19 @@ function TableSection({ section }) {
       {/* Segment summary chart */}
       {chart_spec?.data && (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          {title && (
+            <div className="px-4 pt-4 pb-0">
+              <h3 className="text-sm font-semibold text-gray-700">{title} — Distribution</h3>
+            </div>
+          )}
           <Suspense fallback={PlotFallback}>
             <Plot
               data={chart_spec.data}
               layout={{
                 ...chart_spec.layout,
+                title: undefined,
                 autosize: true,
-                margin: { l: 40, r: 40, t: 50, b: 40 },
+                margin: { l: 40, r: 40, t: 20, b: 40 },
                 paper_bgcolor: "transparent",
                 plot_bgcolor: "transparent",
               }}

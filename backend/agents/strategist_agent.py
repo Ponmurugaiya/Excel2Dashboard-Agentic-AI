@@ -60,6 +60,13 @@ class StrategistAgent(BaseAgent):
         )
         self.memory.remember("initial_tasks", {"tasks": [t.id for t in tasks]})
 
+        # Log full task detail so it appears in the agent log
+        task_lines = "\n".join(
+            f"  [{t.priority}★] {t.name} ({t.pattern}) — {t.reason}"
+            for t in tasks
+        )
+        self.log(f"Analysis plan:\n{task_lines}")
+
         # ── Present task plan to user ─────────────────────────────────────────
         task_list_str = "\n".join(
             f"  • {t.name} — {t.reason}" for t in tasks

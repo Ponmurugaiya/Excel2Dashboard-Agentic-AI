@@ -44,25 +44,53 @@ class BaseAgent:
         Collaborative: posts USER_QUESTION to bus, suspends until response.
         Autonomous:    logs the auto-decision, immediately returns suggestion.
 
+        In BOTH modes: posts a rich DECISION_LOG message so the full
+        decision (context, options, chosen answer, reason) appears in the logs.
+
         Returns the chosen option id.
         """
         if self.mode == RunMode.AUTONOMOUS:
+            chosen = dp.suggested_answer
+
+            # Post auto-decision (compact, for the ⚡ filter)
             self.bus.post_auto_decision(
                 from_agent=self.name,
                 context=dp.context,
-                decision=dp.suggested_answer,
+                decision=chosen,
                 reason=dp.reason,
                 decision_point_id=dp.id,
             )
+
+            # Post rich decision log (for the Decisions tab)
+            self.bus.post(Message(
+                type=MessageType.LOG,
+                from_agent=self.name,
+                to_agent="all",
+                payload={
+                    "text": f"⚡ Auto-decided: {dp.question}",
+                    "log_type": "decision",
+                    "decision_point": {
+                        "id":               dp.id,
+                        "agent":            self.name,
+                        "icon":             dp.icon,
+                        "mode":             "autonomous",
+                        "context":          dp.context,
+                        "question":         dp.question,
+                        "options":          [{"id": o.id, "label": o.label, "description": o.description} for o in dp.options],
+                        "suggested_answer": dp.suggested_answer,
+                        "chosen_answer":    chosen,
+                        "chosen_label":     next((o.label for o in dp.options if o.id == chosen), chosen),
+                        "reason":           dp.reason,
+                        "impact":           dp.impact,
+                    },
+                },
+            ))
+
             self.memory.remember(
                 f"auto_decision:{dp.id}",
-                {
-                    "context": dp.context,
-                    "decision": dp.suggested_answer,
-                    "reason": dp.reason,
-                },
+                {"context": dp.context, "decision": chosen, "reason": dp.reason},
             )
-            return dp.suggested_answer
+            return chosen
 
         else:
             # Collaborative — post question, suspend
@@ -72,13 +100,14 @@ class BaseAgent:
                 to_agent="user",
                 payload={
                     "decision_point": {
-                        "id": dp.id,
-                        "agent": self.name,
-                        "icon": dp.icon,
-                        "context": dp.context,
-                        "question": dp.question,
+                        "id":               dp.id,
+                        "agent":            self.name,
+                        "icon":             dp.icon,
+                        "mode":             "collaborative",
+                        "context":          dp.context,
+                        "question":         dp.question,
                         "suggested_answer": dp.suggested_answer,
-                        "reason": dp.reason,
+                        "reason":           dp.reason,
                         "options": [
                             {"id": o.id, "label": o.label, "description": o.description}
                             for o in dp.options
@@ -88,9 +117,38 @@ class BaseAgent:
                 },
             )
             response = await self.bus.ask_user_async(question_msg)
+
+            # Post the resolved decision to the log
+            chosen_label = next(
+                (o.label for o in dp.options if o.id == response), response
+            )
+            self.bus.post(Message(
+                type=MessageType.LOG,
+                from_agent=self.name,
+                to_agent="all",
+                payload={
+                    "text": f"👤 User chose: {chosen_label} — {dp.question[:80]}",
+                    "log_type": "decision",
+                    "decision_point": {
+                        "id":               dp.id,
+                        "agent":            self.name,
+                        "icon":             dp.icon,
+                        "mode":             "collaborative",
+                        "context":          dp.context,
+                        "question":         dp.question,
+                        "options":          [{"id": o.id, "label": o.label, "description": o.description} for o in dp.options],
+                        "suggested_answer": dp.suggested_answer,
+                        "chosen_answer":    response,
+                        "chosen_label":     chosen_label,
+                        "reason":           dp.reason,
+                        "impact":           dp.impact,
+                    },
+                },
+            ))
+
             self.memory.remember(
                 f"user_decision:{dp.id}",
-                {"question": dp.question, "response": response},
+                {"question": dp.question, "response": response, "chosen_label": chosen_label},
             )
             return response
 

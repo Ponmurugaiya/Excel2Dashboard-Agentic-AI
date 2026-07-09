@@ -148,6 +148,14 @@ class DataScientistAgent(BaseAgent):
         previous_error: str | None = None,
         previous_code:  str | None = None,
     ) -> str:
+        # ── For cohort and RFM: use a pre-written template ────────────────────
+        # These are algorithmic patterns with a correct, fixed implementation.
+        # Let the LLM only fill in column names — not invent the algorithm.
+        if task.pattern == "cohort" and not previous_error:
+            return self._cohort_template(task)
+        if task.pattern == "rfm" and not previous_error:
+            return self._rfm_template(task)
+
         columns_desc = self._format_columns(profile)
 
         # Build the error context with the actual failing code so the LLM can see exactly what went wrong
@@ -290,6 +298,197 @@ def run(df):
         "insight": "Analysis unavailable: {safe_err}"
     }}
 """)
+
+    # ── Pre-written templates for algorithmic patterns ───────────────────────
+
+    def _cohort_template(self, task: AnalysisTask) -> str:
+        """
+        Correct cohort retention implementation.
+        Rows = CohortMonth (first purchase month of each customer cohort).
+        Cols = CohortIndex (0 = acquisition month, 1 = one month later, ...).
+        Values = retention rate (fraction of cohort still active).
+        """
+        cols = task.columns
+        entity_col = cols.get("entity_col", "Customer ID")
+        time_col   = cols.get("time_col",   "InvoiceDate")
+
+        return f"""\
+def run(df):
+    df = df.copy()
+
+    # Ensure datetime
+    df['{time_col}'] = pd.to_datetime(df['{time_col}'], errors='coerce')
+    df = df.dropna(subset=['{time_col}', '{entity_col}'])
+
+    # Cohort month = month of each transaction
+    df['OrderMonth'] = df['{time_col}'].dt.to_period('M')
+
+    # Cohort month = first purchase month per customer
+    first_purchase = df.groupby('{entity_col}')['{time_col}'].transform('min')
+    df['CohortMonth'] = first_purchase.dt.to_period('M')
+
+    # Cohort index = months since first purchase
+    df['CohortIndex'] = (
+        (df['OrderMonth'].dt.year  - df['CohortMonth'].dt.year) * 12 +
+        (df['OrderMonth'].dt.month - df['CohortMonth'].dt.month)
+    )
+
+    # Count unique customers per (CohortMonth, CohortIndex)
+    cohort_data = (
+        df.groupby(['CohortMonth', 'CohortIndex'])['{entity_col}']
+        .nunique()
+        .reset_index()
+    )
+    cohort_pivot = cohort_data.pivot(
+        index='CohortMonth', columns='CohortIndex', values='{entity_col}'
+    )
+
+    # Retention = count / cohort_size (column 0)
+    cohort_size = cohort_pivot.iloc[:, 0]
+    retention   = cohort_pivot.divide(cohort_size, axis=0)
+
+    # Build matrix (None for missing cells)
+    matrix   = []
+    x_labels = ['Month ' + str(c) for c in retention.columns.tolist()]
+    y_labels = [str(idx) for idx in retention.index.tolist()]
+
+    for idx in retention.index:
+        row = []
+        for col in retention.columns:
+            val = retention.loc[idx, col]
+            if pd.isna(val):
+                row.append(None)
+            else:
+                row.append(round(float(val), 4))
+        matrix.append(row)
+
+    # Summary insight
+    if len(matrix) > 0 and len(matrix[0]) > 1:
+        month1_vals = [row[1] for row in matrix if len(row) > 1 and row[1] is not None]
+        avg_month1  = round(sum(month1_vals) / len(month1_vals) * 100, 1) if month1_vals else 0
+        insight = (
+            f"Average month-1 retention is {{avg_month1}}%. "
+            f"{{len(y_labels)}} cohort(s) analysed over {{len(x_labels)}} period(s)."
+        )
+    else:
+        insight = f"{{len(y_labels)}} customer cohort(s) analysed."
+
+    return {{
+        "result_type": "heatmap",
+        "title":       "Cohort Retention",
+        "matrix":      matrix,
+        "x_labels":    x_labels,
+        "y_labels":    y_labels,
+        "insight":     insight,
+    }}
+"""
+
+    def _rfm_template(self, task: AnalysisTask) -> str:
+        """
+        Correct RFM segmentation implementation.
+        Recency  = days since last purchase.
+        Frequency = unique transaction count.
+        Monetary = total spend.
+        Scored 1-4 per quartile, then labelled by combined score.
+        """
+        cols           = task.columns
+        entity_col     = cols.get("entity_col",     "Customer ID")
+        time_col       = cols.get("time_col",       "InvoiceDate")
+        transaction_col = cols.get("transaction_col", "Invoice")
+        value_col      = cols.get("value_col",      "TotalPrice")
+
+        return f"""\
+def run(df):
+    df = df.copy()
+
+    df['{time_col}'] = pd.to_datetime(df['{time_col}'], errors='coerce')
+    df = df.dropna(subset=['{entity_col}', '{time_col}'])
+
+    snapshot = df['{time_col}'].max() + datetime.timedelta(days=1)
+
+    rfm = df.groupby('{entity_col}').agg(
+        Recency  =('{time_col}',       lambda x: (snapshot - x.max()).days),
+        Frequency=('{transaction_col}','nunique'),
+        Monetary =('{value_col}',      'sum'),
+    ).reset_index()
+
+    # Score each metric 1-4 (higher = better)
+    try:
+        rfm['R_Score'] = pd.qcut(rfm['Recency'],
+                                  4, labels=[4, 3, 2, 1], duplicates='drop')
+    except Exception:
+        rfm['R_Score'] = 2
+
+    try:
+        rfm['F_Score'] = pd.qcut(rfm['Frequency'].rank(method='first'),
+                                  4, labels=[1, 2, 3, 4], duplicates='drop')
+    except Exception:
+        rfm['F_Score'] = 2
+
+    try:
+        rfm['M_Score'] = pd.qcut(rfm['Monetary'],
+                                  4, labels=[1, 2, 3, 4], duplicates='drop')
+    except Exception:
+        rfm['M_Score'] = 2
+
+    rfm['RFM_Score'] = (
+        rfm['R_Score'].astype(int) +
+        rfm['F_Score'].astype(int) +
+        rfm['M_Score'].astype(int)
+    )
+
+    def _label(score):
+        if score >= 10: return 'Champion'
+        if score >= 7:  return 'Loyal'
+        if score >= 4:  return 'At Risk'
+        return 'Lost'
+
+    rfm['Segment'] = rfm['RFM_Score'].apply(_label)
+
+    # Build records (max 500)
+    records = []
+    for _, row in rfm.head(500).iterrows():
+        records.append({{
+            str('{entity_col}'): str(row['{entity_col}']),
+            'Recency':    int(row['Recency']),
+            'Frequency':  int(row['Frequency']),
+            'Monetary':   round(float(row['Monetary']), 2),
+            'RFM_Score':  int(row['RFM_Score']),
+            'Segment':    str(row['Segment']),
+        }})
+
+    # Segment summary
+    seg_summary = []
+    for seg, grp in rfm.groupby('Segment'):
+        seg_summary.append({{
+            'segment':      str(seg),
+            'count':        int(len(grp)),
+            'avg_monetary': round(float(grp['Monetary'].mean()), 2),
+            'avg_recency':  round(float(grp['Recency'].mean()),  1),
+        }})
+
+    score_dist = {{
+        'min':  int(rfm['RFM_Score'].min()),
+        'max':  int(rfm['RFM_Score'].max()),
+        'mean': round(float(rfm['RFM_Score'].mean()), 2),
+        'std':  round(float(rfm['RFM_Score'].std()),  2),
+    }}
+
+    top_seg = max(seg_summary, key=lambda s: s['count'], default={{}})
+    insight = (
+        f"{{len(rfm)}} customers segmented. "
+        f"Largest segment: {{top_seg.get('segment', 'N/A')}} ({{top_seg.get('count', 0)}} customers)."
+    )
+
+    return {{
+        "result_type":      "table",
+        "title":            "Customer Segments (RFM)",
+        "records":          records,
+        "segment_summary":  seg_summary,
+        "score_distribution": score_dist,
+        "insight":          insight,
+    }}
+"""
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
