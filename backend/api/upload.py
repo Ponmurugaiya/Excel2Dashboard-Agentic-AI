@@ -1,10 +1,10 @@
 """
-Upload API — Phase 1
-FastAPI endpoint: POST /upload → returns dashboard JSON.
+Upload API
+FastAPI app entry point.
+POST /upload  → saves file, returns file_path for use with /analyse
 Supports Excel (.xlsx, .xls, .xlsm) and CSV (.csv).
 """
 
-import os
 import uuid
 from pathlib import Path
 
@@ -12,31 +12,34 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.dashboard.dashboard_builder import build_dashboard, save_dashboard
 from backend.parser.file_parser import SUPPORTED_EXTENSIONS
+from backend.api.analyse import router as analyse_router
+from backend.api.auth import router as auth_router
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="AI BI Dashboard Builder",
-    description="Upload an Excel or CSV file and receive an auto-generated dashboard.",
-    version="1.0.0",
+    description="Upload a data file and get an AI-powered, agent-designed dashboard.",
+    version="2.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("storage/uploads")
-OUTPUT_DIR = Path("storage/outputs")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# Register routers
+app.include_router(analyse_router)
+app.include_router(auth_router)
 
-ALLOWED_EXTENSIONS = SUPPORTED_EXTENSIONS   # kept in one place: file_parser.py
+UPLOAD_DIR = Path("storage/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_EXTENSIONS = SUPPORTED_EXTENSIONS
 MAX_FILE_SIZE_MB = 50
 
 
@@ -44,30 +47,25 @@ MAX_FILE_SIZE_MB = 50
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "2.0.0"}
 
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
-    Accept an Excel or CSV upload, run the full pipeline, return dashboard JSON.
+    Accept a file upload, save it, return the file_path.
+    Client then calls POST /analyse with this path to start the agent pipeline.
     """
-    # Validate extension
     suffix = Path(file.filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         readable = ", ".join(sorted(ALLOWED_EXTENSIONS))
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{suffix}'. Accepted formats: {readable}.",
+            detail=f"Unsupported file type '{suffix}'. Accepted: {readable}.",
         )
-
-    # Save upload to disk
-    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
-    upload_path = UPLOAD_DIR / unique_name
 
     content = await file.read()
 
-    # Validate size
     size_mb = len(content) / (1024 * 1024)
     if size_mb > MAX_FILE_SIZE_MB:
         raise HTTPException(
@@ -75,25 +73,12 @@ async def upload_file(file: UploadFile = File(...)):
             detail=f"File too large ({size_mb:.1f} MB). Maximum is {MAX_FILE_SIZE_MB} MB.",
         )
 
+    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
+    upload_path = UPLOAD_DIR / unique_name
     upload_path.write_bytes(content)
 
-    # Run pipeline
-    try:
-        dashboard = build_dashboard(str(upload_path))
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except EnvironmentError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Pipeline error: {str(e)}",
-        )
-
-    # Persist output JSON
-    output_path = OUTPUT_DIR / f"{upload_path.stem}_dashboard.json"
-    save_dashboard(dashboard, str(output_path))
-
-    return JSONResponse(content=dashboard)
+    return JSONResponse(content={
+        "file_name": file.filename,
+        "file_path": str(upload_path),
+        "size_mb": round(size_mb, 2),
+    })

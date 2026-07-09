@@ -233,6 +233,8 @@ storage/uploads/*
 storage/outputs/*
 !storage/uploads/.gitkeep
 !storage/outputs/.gitkeep
+storage/sessions/*
+storage/users.db
 
 # Node
 frontend/node_modules/

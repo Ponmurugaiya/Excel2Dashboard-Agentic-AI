@@ -9,6 +9,9 @@ export default defineConfig({
       // Forward /upload and /health to FastAPI during development
       "/upload": "http://localhost:8000",
       "/health": "http://localhost:8000",
+      "/analyse": "http://localhost:8000",
+      "/download": "http://localhost:8000",
+      "/auth": "http://localhost:8000",
     },
   },
 });
