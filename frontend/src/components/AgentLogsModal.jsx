@@ -36,12 +36,12 @@ export default function AgentLogsModal({ events, open, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 animate-fade-in"
       onClick={onClose}
     >
       <div
-        className="bg-gray-950 rounded-2xl border border-gray-700 w-full max-w-3xl
-                   max-h-[85vh] flex flex-col shadow-2xl"
+        className="bg-slate-950 rounded-2xl border border-slate-800 w-full max-w-3xl
+                   max-h-[85vh] flex flex-col shadow-2xl animate-slide-up"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

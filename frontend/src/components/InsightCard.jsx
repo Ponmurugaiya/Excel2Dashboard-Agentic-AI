@@ -1,30 +1,60 @@
 import React from "react";
-import { AlertTriangle, Info, CheckCircle } from "lucide-react";
+import { AlertTriangle, Info, CheckCircle, Lightbulb } from "lucide-react";
 
-const SEVERITY = {
-  high:   { bg: "bg-red-50",    border: "border-red-200",   text: "text-red-800",   icon: AlertTriangle, iconColor: "text-red-500"  },
-  medium: { bg: "bg-blue-50",   border: "border-blue-200",  text: "text-blue-800",  icon: Info,          iconColor: "text-blue-500" },
-  low:    { bg: "bg-green-50",  border: "border-green-200", text: "text-green-800", icon: CheckCircle,   iconColor: "text-green-500"},
+const VARIANTS = {
+  high: {
+    wrap:  "bg-red-50 border-red-200",
+    icon:  "bg-red-100 text-red-600",
+    title: "text-red-800",
+    body:  "text-red-700",
+    rec:   "bg-red-100/60 text-red-700",
+    Icon:  AlertTriangle,
+  },
+  medium: {
+    wrap:  "bg-blue-50 border-blue-200",
+    icon:  "bg-blue-100 text-blue-600",
+    title: "text-blue-800",
+    body:  "text-blue-700",
+    rec:   "bg-blue-100/60 text-blue-700",
+    Icon:  Info,
+  },
+  low: {
+    wrap:  "bg-emerald-50 border-emerald-200",
+    icon:  "bg-emerald-100 text-emerald-600",
+    title: "text-emerald-800",
+    body:  "text-emerald-700",
+    rec:   "bg-emerald-100/60 text-emerald-700",
+    Icon:  CheckCircle,
+  },
+  info: {
+    wrap:  "bg-violet-50 border-violet-200",
+    icon:  "bg-violet-100 text-violet-600",
+    title: "text-violet-800",
+    body:  "text-violet-700",
+    rec:   "bg-violet-100/60 text-violet-700",
+    Icon:  Lightbulb,
+  },
 };
 
 export default function InsightCard({ text, recommendation, severity = "medium" }) {
-  const s = SEVERITY[severity] || SEVERITY.medium;
-  const Icon = s.icon;
+  const v = VARIANTS[severity] || VARIANTS.medium;
+  const { Icon } = v;
 
   return (
-    <div className={`${s.bg} ${s.border} border rounded-xl p-4`}>
+    <div className={`rounded-2xl border p-4 space-y-2.5 ${v.wrap}`}>
       <div className="flex items-start gap-3">
-        <Icon className={`w-4 h-4 mt-0.5 flex-shrink-0 ${s.iconColor}`} />
-        <div className="space-y-1.5">
-          <p className={`text-sm font-medium ${s.text}`}>{text}</p>
-          {recommendation && (
-            <p className={`text-xs ${s.text} opacity-80`}>
-              <span className="font-semibold">Recommendation: </span>
-              {recommendation}
-            </p>
-          )}
+        <div className={`p-2 rounded-xl flex-shrink-0 ${v.icon}`}>
+          <Icon className="w-4 h-4" />
         </div>
+        <p className={`text-sm font-semibold leading-relaxed pt-1 ${v.title}`}>{text}</p>
       </div>
+
+      {recommendation && (
+        <div className={`ml-11 rounded-xl px-3 py-2.5 text-xs leading-relaxed ${v.rec}`}>
+          <span className="font-bold">Recommendation: </span>
+          {recommendation}
+        </div>
+      )}
     </div>
   );
 }

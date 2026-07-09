@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 
 /**
  * Renders a decision point card when an agent pauses for user input.
@@ -17,72 +17,98 @@ export default function AgentQuestionCard({ question, onAnswer, loading }) {
     onAnswer(dp.id, optionId);
   };
 
-  const isSuggested = (optionId) => optionId === dp.suggested_answer;
+  const suggestedOption = dp.options?.find((o) => o.id === dp.suggested_answer);
+  const selectedOption  = dp.options?.find((o) => o.id === selected);
 
   return (
-    <div className="bg-white border-2 border-blue-200 rounded-2xl p-5 shadow-sm animate-fade-in">
+    <div className="card p-6 border-brand-200 border-2 animate-slide-up shadow-card-md">
       {/* Agent header */}
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-xl">{dp.icon || "🤔"}</span>
-        <div>
-          <p className="text-sm font-semibold text-gray-800">{dp.agent}</p>
-          <p className="text-xs text-gray-400">is asking for your input</p>
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-2xl bg-brand-100 flex items-center justify-center text-xl">
+          {dp.icon || "🤔"}
         </div>
+        <div>
+          <p className="text-sm font-bold text-slate-900">{dp.agent}</p>
+          <p className="text-xs text-slate-400">is asking for your input</p>
+        </div>
+        <span className="ml-auto badge bg-brand-100 text-brand-700">
+          Action required
+        </span>
       </div>
 
       {/* Context */}
       {dp.context && (
-        <p className="text-sm text-gray-600 mb-2">{dp.context}</p>
+        <p className="text-sm text-slate-600 mb-3">{dp.context}</p>
       )}
 
       {/* Question */}
-      <p className="text-sm font-medium text-gray-800 mb-1">{dp.question}</p>
+      <p className="text-sm font-bold text-slate-800 mb-2 leading-relaxed">
+        {dp.question}
+      </p>
 
       {/* Impact */}
       {dp.impact && (
-        <p className="text-xs text-gray-400 mb-3">
-          <span className="inline-block bg-gray-100 px-2 py-0.5 rounded-full">{dp.impact}</span>
+        <p className="text-xs text-slate-400 mb-4">
+          <span className="badge bg-slate-100 text-slate-500">
+            {dp.impact}
+          </span>
         </p>
       )}
 
       {/* Suggestion highlight */}
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-4">
-        <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">
-          Suggested
-        </p>
-        <p className="text-sm text-blue-800 font-medium">
-          {dp.options?.find(o => o.id === dp.suggested_answer)?.label}
-        </p>
-        <p className="text-xs text-blue-600 mt-1">{dp.reason}</p>
-      </div>
+      {suggestedOption && (
+        <div className="bg-brand-50 border border-brand-200
+                        rounded-xl p-4 mb-5">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-brand-600" />
+            <p className="text-xs font-bold text-brand-700 uppercase tracking-wider">
+              AI Suggestion
+            </p>
+          </div>
+          <p className="text-sm font-bold text-brand-900">{suggestedOption.label}</p>
+          {dp.reason && (
+            <p className="text-xs text-brand-600 mt-1.5 leading-relaxed">{dp.reason}</p>
+          )}
+        </div>
+      )}
 
       {/* Options */}
       <div className="flex flex-wrap gap-2">
-        {(dp.options || []).map((opt) => (
-          <button
-            key={opt.id}
-            disabled={loading || selected !== null}
-            onClick={() => handleSelect(opt.id)}
-            className={`
-              flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all
-              ${selected === opt.id
-                ? "bg-blue-600 text-white"
-                : isSuggested(opt.id)
-                  ? "bg-blue-600 text-white hover:bg-blue-700"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"}
-              disabled:opacity-60
-            `}
-          >
-            {loading && selected === opt.id && (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            )}
-            {opt.label}
-          </button>
-        ))}
+        {(dp.options || []).map((opt) => {
+          const isSelected  = selected === opt.id;
+          const isSuggested = opt.id === dp.suggested_answer;
+          return (
+            <button
+              key={opt.id}
+              disabled={loading || selected !== null}
+              onClick={() => handleSelect(opt.id)}
+              className={`
+                flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold
+                transition-all duration-150 disabled:opacity-60
+                focus:outline-none focus:ring-2 focus:ring-brand-400 focus:ring-offset-2
+                ${isSelected
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : isSuggested
+                    ? "bg-brand-600 text-white hover:bg-brand-700"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200:bg-dark-muted"
+                }
+              `}
+            >
+              {loading && isSelected && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {opt.label}
+              {isSuggested && !isSelected && (
+                <span className="text-xs opacity-70 font-normal">(suggested)</span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {dp.options?.find(o => o.id === selected)?.description && (
-        <p className="text-xs text-gray-400 mt-2">{dp.options?.find(o => o.id === selected)?.description}</p>
+      {/* Selected option description */}
+      {selectedOption?.description && (
+        <p className="text-xs text-slate-400 mt-3 animate-fade-in">
+          {selectedOption.description}
+        </p>
       )}
     </div>
   );

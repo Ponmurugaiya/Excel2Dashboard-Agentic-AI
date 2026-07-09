@@ -1,70 +1,72 @@
 import React from "react";
-import { Users, Zap } from "lucide-react";
+import { Users, Zap, CheckCircle2 } from "lucide-react";
 
-/**
- * Mode selector shown before starting analysis.
- * Collaborative (default) vs Autonomous.
- */
+const OPTIONS = [
+  {
+    id:    "collaborative",
+    label: "Collaborative",
+    desc:  "Agents pause and ask you at key decision points. You guide the analysis.",
+    icon:  Users,
+    active:  "border-brand-500 bg-brand-50",
+    inactive: "border-slate-200 bg-white hover:border-brand-300",
+    iconActive:   "bg-brand-100 text-brand-600",
+    iconInactive: "bg-slate-100 text-slate-500",
+    badge: "badge bg-brand-100 text-brand-700",
+    title: "text-brand-700",
+  },
+  {
+    id:    "autonomous",
+    label: "Fully Autonomous",
+    desc:  "Agents make all decisions automatically. No interruptions. Review decisions after.",
+    icon:  Zap,
+    active:   "border-amber-500 bg-amber-50",
+    inactive: "border-slate-200 bg-white hover:border-amber-300",
+    iconActive:   "bg-amber-100 text-amber-600",
+    iconInactive: "bg-slate-100 text-slate-500",
+    badge: "badge bg-amber-100 text-amber-700",
+    title: "text-amber-700",
+  },
+];
+
 export default function ModeSelector({ mode, onChange }) {
   return (
-    <div className="w-full max-w-lg">
-      <p className="text-sm font-medium text-gray-700 mb-3">How should the agents run?</p>
-      <div className="grid grid-cols-2 gap-3">
-        {/* Collaborative */}
-        <button
-          onClick={() => onChange("collaborative")}
-          className={`
-            flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all
-            ${mode === "collaborative"
-              ? "border-blue-500 bg-blue-50"
-              : "border-gray-200 bg-white hover:border-gray-300"}
-          `}
-        >
-          <div className={`p-2 rounded-lg ${mode === "collaborative" ? "bg-blue-100" : "bg-gray-100"}`}>
-            <Users className={`w-4 h-4 ${mode === "collaborative" ? "text-blue-600" : "text-gray-500"}`} />
-          </div>
-          <div>
-            <p className={`text-sm font-semibold ${mode === "collaborative" ? "text-blue-700" : "text-gray-800"}`}>
-              Collaborative
-            </p>
-            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-              Agents pause and ask you at key decision points. You guide the analysis.
-            </p>
-          </div>
-          {mode === "collaborative" && (
-            <span className="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">
-              Selected
-            </span>
-          )}
-        </button>
-
-        {/* Autonomous */}
-        <button
-          onClick={() => onChange("autonomous")}
-          className={`
-            flex flex-col items-start gap-2 p-4 rounded-xl border-2 text-left transition-all
-            ${mode === "autonomous"
-              ? "border-amber-500 bg-amber-50"
-              : "border-gray-200 bg-white hover:border-gray-300"}
-          `}
-        >
-          <div className={`p-2 rounded-lg ${mode === "autonomous" ? "bg-amber-100" : "bg-gray-100"}`}>
-            <Zap className={`w-4 h-4 ${mode === "autonomous" ? "text-amber-600" : "text-gray-500"}`} />
-          </div>
-          <div>
-            <p className={`text-sm font-semibold ${mode === "autonomous" ? "text-amber-700" : "text-gray-800"}`}>
-              Fully Autonomous
-            </p>
-            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-              Agents make all decisions automatically. No interruptions. Review decisions after.
-            </p>
-          </div>
-          {mode === "autonomous" && (
-            <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
-              Selected
-            </span>
-          )}
-        </button>
+    <div className="w-full">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {OPTIONS.map((opt) => {
+          const isActive = mode === opt.id;
+          const Icon = opt.icon;
+          return (
+            <button
+              key={opt.id}
+              onClick={() => onChange(opt.id)}
+              className={`
+                flex flex-col items-start gap-3 p-5 rounded-2xl border-2 text-left
+                transition-all duration-150 focus:outline-none focus:ring-2
+                focus:ring-brand-400 focus:ring-offset-2
+                ${isActive ? opt.active : opt.inactive}
+              `}
+            >
+              <div className={`p-2.5 rounded-xl transition-colors ${isActive ? opt.iconActive : opt.iconInactive}`}>
+                <Icon className="w-4 h-4" />
+              </div>
+              <div className="flex-1">
+                <p className={`text-sm font-bold transition-colors
+                  ${isActive ? opt.title : "text-slate-800"}`}>
+                  {opt.label}
+                </p>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  {opt.desc}
+                </p>
+              </div>
+              {isActive && (
+                <span className={`${opt.badge} flex items-center gap-1`}>
+                  <CheckCircle2 className="w-3 h-3" />
+                  Selected
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

@@ -29,23 +29,26 @@ export default function AgentProgressFeed({ events, status }) {
   );
 
   return (
-    <div className="bg-gray-950 rounded-2xl border border-gray-800 overflow-hidden">
+    <div className="bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
         <div className={`w-2 h-2 rounded-full ${
-          status === "done"  ? "bg-green-400" :
-          status === "error" ? "bg-red-400"   :
-          "bg-blue-400 animate-pulse"
+          status === "done"  ? "bg-emerald-400" :
+          status === "error" ? "bg-red-400"     :
+          "bg-brand-400 animate-pulse"
         }`} />
-        <span className="text-xs font-mono text-gray-400">
+        <span className="text-xs font-mono text-slate-400">
           {STATUS_LABELS[status] || status}
+        </span>
+        <span className="ml-auto text-xs font-mono text-slate-600">
+          {displayEvents.length} events
         </span>
       </div>
 
       {/* Events */}
       <div className="p-4 space-y-1 max-h-72 overflow-y-auto font-mono text-xs">
         {displayEvents.length === 0 && (
-          <p className="text-gray-600">Waiting for agents to start...</p>
+          <p className="text-slate-600">Waiting for agents to start…</p>
         )}
         {displayEvents.map((ev, i) => (
           <EventRow key={ev.id || i} event={ev} />
