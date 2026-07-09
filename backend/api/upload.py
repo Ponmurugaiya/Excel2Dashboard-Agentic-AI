@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from backend.parser.file_parser import SUPPORTED_EXTENSIONS
 from backend.api.analyse import router as analyse_router
 from backend.api.auth import router as auth_router
+from backend.api.chat import router as chat_router
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ app.add_middleware(
 # Register routers
 app.include_router(analyse_router)
 app.include_router(auth_router)
+app.include_router(chat_router)
 
 UPLOAD_DIR = Path("storage/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,6 +50,16 @@ MAX_FILE_SIZE_MB = 50
 @app.get("/health")
 def health_check():
     return {"status": "ok", "version": "2.0.0"}
+
+
+@app.get("/health/llm")
+def llm_health():
+    """Check which LLM models are configured and which is active per task."""
+    from backend.llm.client import provider_status, task_chain_status
+    return {
+        "models":  provider_status(),
+        "routing": task_chain_status(),
+    }
 
 
 @app.post("/upload")

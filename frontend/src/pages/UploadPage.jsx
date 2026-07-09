@@ -7,12 +7,15 @@ import ModeSelector from "../components/ModeSelector";
  * Upload screen — now returns file_path and mode to parent.
  * Parent (App) then navigates to AnalysisPage.
  */
-export default function UploadPage({ onReady }) {
+export default function UploadPage({ onReady, error: externalError }) {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
+  const [localError, setLocalError] = useState(null);
   const [fileName, setFileName] = useState(null);
   const [mode, setMode]         = useState("collaborative");
+
+  // Show either the external error (from failed analysis) or local upload error
+  const error = localError || externalError;
 
   const handleFile = useCallback(
     async (file) => {
@@ -21,11 +24,11 @@ export default function UploadPage({ onReady }) {
       const allowed = [".xlsx", ".xls", ".xlsm", ".csv"];
       const ext = "." + file.name.split(".").pop().toLowerCase();
       if (!allowed.includes(ext)) {
-        setError(`Unsupported file type "${ext}".`);
+        setLocalError(`Unsupported file type "${ext}".`);
         return;
       }
 
-      setError(null);
+      setLocalError(null);
       setFileName(file.name);
       setLoading(true);
 
@@ -33,7 +36,7 @@ export default function UploadPage({ onReady }) {
         const res = await uploadAPI.upload(file);
         onReady(res.data.file_path, mode);
       } catch (err) {
-        setError(err.response?.data?.detail || err.message || "Upload failed.");
+        setLocalError(err.response?.data?.detail || err.message || "Upload failed.");
         setFileName(null);
       } finally {
         setLoading(false);

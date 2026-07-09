@@ -16,6 +16,8 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
   const [answering, setAnswering] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const esRef = useRef(null);
+  // Keep a ref so the SSE closure always has the latest events list
+  const eventsRef = useRef([]);
 
   // Start the analysis session and open SSE stream
   useEffect(() => {
@@ -41,9 +43,9 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
               setStatus(msg.status);
               es.close();
               if (msg.status === "done") {
-                // Fetch final spec
+                // Fetch final spec and pass events along
                 analyseAPI.getStatus(sid).then((r) => {
-                  onDone(sid, r.data.dashboard, r.data.downloads || []);
+                  onDone(sid, r.data.dashboard, r.data.downloads || [], eventsRef.current);
                 });
               } else if (msg.status === "error") {
                 onError(msg.error || "Analysis failed.");
@@ -68,7 +70,11 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
               else if (text.includes("ready") || text.includes("Done")) setStatus("done");
             }
 
-            setEvents((prev) => [...prev, msg]);
+            setEvents((prev) => {
+              const next = [...prev, msg];
+              eventsRef.current = next;
+              return next;
+            });
           } catch {}
         };
 
@@ -78,7 +84,7 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
           // Poll for final status
           analyseAPI.getStatus(sid).then((r) => {
             if (r.data.status === "done") {
-              onDone(sid, r.data.dashboard, r.data.downloads || []);
+              onDone(sid, r.data.dashboard, r.data.downloads || [], eventsRef.current);
             } else if (r.data.status === "error") {
               onError(r.data.error || "Analysis failed.");
             }

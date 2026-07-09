@@ -29,6 +29,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(null);
   const [spec, setSpec]         = useState(null);
   const [downloads, setDownloads] = useState([]);
+  const [events, setEvents]     = useState([]);
   const [error, setError]       = useState(null);
 
   // Login → Upload
@@ -43,10 +44,11 @@ export default function App() {
   };
 
   // AnalysisPage calls this when pipeline completes
-  const handleDone = (sid, dashSpec, dlList) => {
+  const handleDone = (sid, dashSpec, dlList, evtList) => {
     setSessionId(sid);
     setSpec(dashSpec);
     setDownloads(dlList || []);
+    setEvents(evtList || []);
     setScreen(SCREEN.DASHBOARD);
   };
 
@@ -62,6 +64,7 @@ export default function App() {
     setSpec(null);
     setSessionId(null);
     setDownloads([]);
+    setEvents([]);
     setError(null);
     setScreen(SCREEN.UPLOAD);
   };
@@ -104,6 +107,7 @@ export default function App() {
           spec={spec}
           downloads={downloads}
           mode={runMode}
+          events={events}
           onReset={handleReset}
           onLoadSaved={handleLoadSaved}
         />

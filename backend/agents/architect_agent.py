@@ -168,7 +168,7 @@ Return a JSON array:
 Return ONLY the JSON array.
 """
         try:
-            raw = self._llm_json(prompt)
+            raw = self._llm_json(prompt, task="planning")
             if isinstance(raw, list) and raw:
                 return raw
         except Exception as e:

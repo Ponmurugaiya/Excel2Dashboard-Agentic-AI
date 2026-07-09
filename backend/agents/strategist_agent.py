@@ -198,7 +198,7 @@ RULES:
 Return a JSON array of task objects. Nothing else.
 """
         try:
-            raw = self._llm_json(prompt)
+            raw = self._llm_json(prompt, task="planning")
             tasks = []
             for item in (raw if isinstance(raw, list) else raw.get("tasks", [])):
                 tasks.append(AnalysisTask(

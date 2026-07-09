@@ -286,26 +286,9 @@ Return ONLY the Python function code, nothing else.
 """
 
         try:
-            import google.generativeai as genai
-            import os
-
-            api_key = os.getenv("GEMINI_API_KEY")
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
-                model_name=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
-                system_instruction="You are a Python data analysis expert. Return only valid Python code.",
-                generation_config=genai.GenerationConfig(
-                    temperature=0.1,
-                    max_output_tokens=4096,
-                ),
-            )
-            raw = model.generate_content(prompt).text.strip()
-
-            # Strip markdown code fences if present
-            import re
-            raw = re.sub(r"```python\s*", "", raw)
-            raw = re.sub(r"```\s*", "", raw)
-            return raw.strip()
+            from backend.llm.client import llm_code
+            raw = llm_code(prompt)
+            return raw
 
         except Exception as e:
             # Fallback: return a minimal safe function

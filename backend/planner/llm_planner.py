@@ -1,44 +1,40 @@
 """
-Dashboard Planner — Phase 1
+Dashboard Planner — Phase 1 (legacy, kept for backward compatibility)
 Single LLM call that takes the dataset profile and returns KPI + chart recommendations.
-Uses Google Gemini via the official google-generativeai SDK.
+Now routes through the unified LLM client (Gemini → Groq fallback).
 """
 
 import json
-import os
 import re
 from typing import Any, Dict
 
-import google.generativeai as genai
+from backend.llm.client import llm_json as _llm_json_base
+
+def _client_llm_json(prompt: str, task: str = "planning") -> dict:
+    return _llm_json_base(prompt, task=task)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def plan_dashboard(profile: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Given a dataset profile (from profiler.profile_sheets), ask the LLM to
-    recommend KPIs and charts.
-
-    Returns:
-    {
-        "kpis":    [ {"label": ..., "column": ..., "aggregation": ..., "format": ...} ],
-        "charts":  [ {"type": ..., "title": ..., "x": ..., "y": ..., "sheet": ...} ],
-        "reasoning": "..."
-    }
+    Given a dataset profile, ask the LLM to recommend KPIs and charts.
     """
     prompt = _build_prompt(profile)
-    raw_response = _call_llm(prompt)
-    plan = _parse_response(raw_response)
-    return plan
+    try:
+        return _client_llm_json(prompt, task="planning")
+    except Exception as e:
+        preview = str(e)[:200]
+        return {
+            "kpis": [],
+            "charts": [],
+            "reasoning": f"LLM planning failed: {preview}",
+        }
 
 
 # ── Prompt builder ────────────────────────────────────────────────────────────
 
 def _build_prompt(profile: Dict[str, Any]) -> str:
-    """
-    Convert the data profile into a compact prompt.
-    Keeping the prompt short directly reduces the output size needed.
-    """
     sheet_summaries = []
     for sheet_name, sheet_profile in profile.items():
         col_lines = []
@@ -59,8 +55,7 @@ def _build_prompt(profile: Dict[str, Any]) -> str:
 
     dataset_description = "\n\n".join(sheet_summaries)
 
-    # Strict rules keep the response short and parseable
-    prompt = f"""You are a BI dashboard expert. Analyse this dataset profile and return a JSON dashboard plan.
+    return f"""You are a BI dashboard expert. Analyse this dataset profile and return a JSON dashboard plan.
 
 {dataset_description}
 
@@ -78,81 +73,3 @@ Return ONLY this JSON structure, nothing else:
   "charts": [{{"type":"...","title":"...","x":"...","y":"...","color":null,"sheet":"..."}}],
   "reasoning": "..."
 }}"""
-    return prompt
-
-
-# ── LLM call ─────────────────────────────────────────────────────────────────
-
-def _call_llm(prompt: str) -> str:
-    """
-    Call Google Gemini. Raises EnvironmentError if the API key is missing.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise EnvironmentError(
-            "GEMINI_API_KEY is not set. "
-            "Add it to your .env file. "
-            "Get a free key at https://aistudio.google.com/app/apikey"
-        )
-
-    genai.configure(api_key=api_key)
-
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=(
-            "You are a senior data analyst. "
-            "Respond with valid JSON only — no markdown, no code fences, no extra text."
-        ),
-        generation_config=genai.GenerationConfig(
-            temperature=0.1,          # as deterministic as possible
-            max_output_tokens=8192,   # ample room — never truncate mid-JSON
-            response_mime_type="application/json",
-        ),
-    )
-
-    response = model.generate_content(prompt)
-    return response.text.strip()
-
-
-# ── Response parser ───────────────────────────────────────────────────────────
-
-def _parse_response(raw: str) -> Dict[str, Any]:
-    """
-    Parse the LLM JSON response with multiple fallback strategies:
-    1. Direct parse
-    2. Strip markdown fences and retry
-    3. Extract the first {...} block with regex and retry
-    4. Return a safe empty structure so the pipeline never crashes
-    """
-    # ── Strategy 1: direct parse ──────────────────────────────────────────────
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    # ── Strategy 2: strip markdown fences ────────────────────────────────────
-    clean = re.sub(r"```(?:json)?", "", raw).strip()
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        pass
-
-    # ── Strategy 3: extract first { ... } block ───────────────────────────────
-    # Handles cases where the model prefixes text before the JSON
-    match = re.search(r"\{.*\}", clean, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # ── Strategy 4: safe fallback ─────────────────────────────────────────────
-    # Log enough context to diagnose without crashing the pipeline
-    preview = raw[:400].replace("\n", " ")
-    return {
-        "kpis": [],
-        "charts": [],
-        "reasoning": f"Could not parse LLM response. Raw preview: {preview}",
-    }

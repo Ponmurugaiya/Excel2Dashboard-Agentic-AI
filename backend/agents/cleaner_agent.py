@@ -86,103 +86,130 @@ class CleanerAgent(BaseAgent):
     def _detect_rules(self, df: pd.DataFrame) -> list[dict]:
         """
         Inspect the dataframe and build a list of applicable cleaning rules.
-        Purely deterministic — no LLM needed here.
+        Column matching normalises away spaces and underscores so that
+        'Customer ID', 'customer_id', and 'customerid' all match.
         """
         rules = []
-        cols = df.columns.tolist()
-        col_lower = {c.lower(): c for c in cols}
 
-        # Rule 1: drop rows where a likely entity-ID column is null
-        for candidate in ["customerid", "customer_id", "userid", "user_id", "patientid", "employeeid", "id"]:
-            if candidate in col_lower:
-                real_col = col_lower[candidate]
-                null_count = int(df[real_col].isna().sum())
-                null_pct = round(null_count / len(df) * 100, 1)
-                if null_count > 0:
-                    rules.append({
-                        "id": f"drop_null_{real_col}",
-                        "label": f"Remove rows with missing {real_col}",
-                        "reason": f"Without {real_col}, customer-level analysis is impossible. "
-                                  f"{null_pct}% of rows affected.",
-                        "impact": null_count,
-                        "action": "dropna",
-                        "column": real_col,
-                    })
-                break
+        # Build a normalised lookup: strip spaces + underscores + lowercase
+        # e.g. "Customer ID" → "customerid", "Invoice Date" → "invoicedate"
+        col_norm = {
+            c.lower().replace(" ", "").replace("_", ""): c
+            for c in df.columns
+        }
 
-        # Rule 2: remove likely cancellation/reversal records
-        for candidate in ["invoiceno", "invoice_no", "order_id", "orderid", "transaction_id"]:
-            if candidate in col_lower:
-                real_col = col_lower[candidate]
-                cancel_mask = df[real_col].astype(str).str.startswith("C")
-                cancel_count = int(cancel_mask.sum())
-                if cancel_count > 0:
-                    rules.append({
-                        "id": f"remove_cancellations_{real_col}",
-                        "label": f"Remove cancelled records ({real_col} starts with 'C')",
-                        "reason": f"Cancellations inflate gross revenue and distort trend analysis. "
-                                  f"{cancel_count:,} records affected.",
-                        "impact": cancel_count,
-                        "action": "filter_not_startswith",
-                        "column": real_col,
-                        "value": "C",
-                    })
-                break
+        def find_col(candidates: list[str]) -> str | None:
+            """Return the actual DataFrame column name matching any candidate."""
+            for cand in candidates:
+                norm = cand.lower().replace(" ", "").replace("_", "")
+                if norm in col_norm:
+                    return col_norm[norm]
+            return None
 
-        # Rule 3: remove negative/zero quantity
-        for candidate in ["quantity", "qty", "units", "count"]:
-            if candidate in col_lower:
-                real_col = col_lower[candidate]
-                if pd.api.types.is_numeric_dtype(df[real_col]):
-                    bad_count = int((df[real_col] <= 0).sum())
-                    if bad_count > 0:
-                        rules.append({
-                            "id": f"remove_nonpositive_{real_col}",
-                            "label": f"Remove rows with {real_col} ≤ 0",
-                            "reason": f"Zero or negative quantities are data entry errors or returns. "
-                                      f"{bad_count:,} rows affected.",
-                            "impact": bad_count,
-                            "action": "filter_positive",
-                            "column": real_col,
-                        })
-                break
+        # ── Rule 1: drop rows where entity-ID column is null ──────────────────
+        entity_col = find_col([
+            "customerid", "customer id", "customer_id",
+            "userid", "user id", "user_id",
+            "patientid", "patient id", "patient_id",
+            "employeeid", "employee id", "employee_id",
+        ])
+        if entity_col:
+            null_count = int(df[entity_col].isna().sum())
+            null_pct = round(null_count / len(df) * 100, 1)
+            if null_count > 0:
+                rules.append({
+                    "id": f"drop_null_{entity_col}",
+                    "label": f"Remove rows with missing {entity_col}",
+                    "reason": (
+                        f"Without {entity_col}, customer-level analysis is impossible. "
+                        f"{null_pct}% of rows ({null_count:,}) are affected."
+                    ),
+                    "impact": null_count,
+                    "action": "dropna",
+                    "column": entity_col,
+                })
 
-        # Rule 4: remove negative/zero price
-        for candidate in ["unitprice", "unit_price", "price", "amount", "cost"]:
-            if candidate in col_lower:
-                real_col = col_lower[candidate]
-                if pd.api.types.is_numeric_dtype(df[real_col]):
-                    bad_count = int((df[real_col] <= 0).sum())
-                    if bad_count > 0:
-                        rules.append({
-                            "id": f"remove_nonpositive_{real_col}",
-                            "label": f"Remove rows with {real_col} ≤ 0",
-                            "reason": f"Zero or negative prices indicate errors or free items that "
-                                      f"would skew revenue analysis. {bad_count:,} rows affected.",
-                            "impact": bad_count,
-                            "action": "filter_positive",
-                            "column": real_col,
-                        })
-                break
+        # ── Rule 2: remove cancellation/reversal records ──────────────────────
+        invoice_col = find_col([
+            "invoiceno", "invoice no", "invoice_no",
+            "invoice", "orderid", "order id", "order_id",
+            "transactionid", "transaction id", "transaction_id",
+        ])
+        if invoice_col:
+            cancel_mask = df[invoice_col].astype(str).str.strip().str.startswith("C")
+            cancel_count = int(cancel_mask.sum())
+            if cancel_count > 0:
+                rules.append({
+                    "id": f"remove_cancellations_{invoice_col}",
+                    "label": f"Remove cancelled records ({invoice_col} starts with 'C')",
+                    "reason": (
+                        f"Cancellations inflate gross revenue and distort trend analysis. "
+                        f"{cancel_count:,} records affected."
+                    ),
+                    "impact": cancel_count,
+                    "action": "filter_not_startswith",
+                    "column": invoice_col,
+                    "value": "C",
+                })
 
-        # Rule 5: parse date column if stored as string
-        for candidate in ["invoicedate", "invoice_date", "orderdate", "order_date", "date", "timestamp"]:
-            if candidate in col_lower:
-                real_col = col_lower[candidate]
-                if not pd.api.types.is_datetime64_any_dtype(df[real_col]):
-                    coerced = pd.to_datetime(df[real_col], errors="coerce")
-                    parseable = int(coerced.notna().sum())
-                    if parseable > len(df) * 0.7:
-                        rules.append({
-                            "id": f"parse_datetime_{real_col}",
-                            "label": f"Parse {real_col} as datetime",
-                            "reason": f"Time-series and cohort analyses require a proper datetime type. "
-                                      f"{parseable:,} values can be parsed.",
-                            "impact": 0,
-                            "action": "parse_datetime",
-                            "column": real_col,
-                        })
-                break
+        # ── Rule 3: remove negative/zero quantity ─────────────────────────────
+        qty_col = find_col(["quantity", "qty", "units", "count"])
+        if qty_col and pd.api.types.is_numeric_dtype(df[qty_col]):
+            bad_count = int((df[qty_col] <= 0).sum())
+            if bad_count > 0:
+                rules.append({
+                    "id": f"remove_nonpositive_{qty_col}",
+                    "label": f"Remove rows with {qty_col} ≤ 0",
+                    "reason": (
+                        f"Zero or negative quantities are data entry errors or returns. "
+                        f"{bad_count:,} rows affected."
+                    ),
+                    "impact": bad_count,
+                    "action": "filter_positive",
+                    "column": qty_col,
+                })
+
+        # ── Rule 4: remove negative/zero price ────────────────────────────────
+        price_col = find_col([
+            "unitprice", "unit price", "unit_price",
+            "price", "amount", "cost",
+        ])
+        if price_col and pd.api.types.is_numeric_dtype(df[price_col]):
+            bad_count = int((df[price_col] <= 0).sum())
+            if bad_count > 0:
+                rules.append({
+                    "id": f"remove_nonpositive_{price_col}",
+                    "label": f"Remove rows with {price_col} ≤ 0",
+                    "reason": (
+                        f"Zero or negative prices indicate errors or free items that "
+                        f"would skew revenue analysis. {bad_count:,} rows affected."
+                    ),
+                    "impact": bad_count,
+                    "action": "filter_positive",
+                    "column": price_col,
+                })
+
+        # ── Rule 5: parse date column stored as string ────────────────────────
+        date_col = find_col([
+            "invoicedate", "invoice date", "invoice_date",
+            "orderdate", "order date", "order_date",
+            "date", "timestamp", "createdat", "created at",
+        ])
+        if date_col and not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+            coerced = pd.to_datetime(df[date_col], errors="coerce")
+            parseable = int(coerced.notna().sum())
+            if parseable > len(df) * 0.7:
+                rules.append({
+                    "id": f"parse_datetime_{date_col}",
+                    "label": f"Parse {date_col} as datetime",
+                    "reason": (
+                        f"Time-series and cohort analyses require a proper datetime type. "
+                        f"{parseable:,} values can be parsed."
+                    ),
+                    "impact": 0,
+                    "action": "parse_datetime",
+                    "column": date_col,
+                })
 
         return rules
 
@@ -215,7 +242,7 @@ class CleanerAgent(BaseAgent):
 
         elif action == "filter_not_startswith":
             val = rule.get("value", "C")
-            mask = ~df[col].astype(str).str.startswith(val)
+            mask = ~df[col].astype(str).str.strip().str.startswith(val)
             return df[mask]
 
         elif action == "filter_positive":
@@ -234,13 +261,26 @@ class CleanerAgent(BaseAgent):
         """Create standard derived columns when source columns exist."""
         df = df.copy()
         derived = []
-        col_lower = {c.lower(): c for c in df.columns}
 
-        # TotalPrice = Quantity × UnitPrice (if not already present)
-        qty_col = col_lower.get("quantity") or col_lower.get("qty")
-        price_col = col_lower.get("unitprice") or col_lower.get("unit_price") or col_lower.get("price")
+        col_norm = {
+            c.lower().replace(" ", "").replace("_", ""): c
+            for c in df.columns
+        }
 
-        if qty_col and price_col and "totalprice" not in col_lower and "total_price" not in col_lower:
+        def find_col(candidates: list[str]) -> str | None:
+            for cand in candidates:
+                norm = cand.lower().replace(" ", "").replace("_", "")
+                if norm in col_norm:
+                    return col_norm[norm]
+            return None
+
+        qty_col   = find_col(["quantity", "qty", "units"])
+        price_col = find_col(["unitprice", "unit price", "unit_price", "price"])
+
+        has_total = find_col(["totalprice", "total price", "total_price",
+                               "totalamount", "total amount", "revenue"])
+
+        if qty_col and price_col and not has_total:
             df["TotalPrice"] = df[qty_col] * df[price_col]
             derived.append("TotalPrice")
 

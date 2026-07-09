@@ -134,7 +134,7 @@ Rules:
 - Return ONLY the JSON array
 """
         try:
-            raw = self._llm_json(prompt)
+            raw = self._llm_json(prompt, task="json")
             if isinstance(raw, list):
                 return raw
             return raw.get("insights", [])
