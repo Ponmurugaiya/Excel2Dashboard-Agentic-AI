@@ -37,6 +37,10 @@ class AnswerRequest(BaseModel):
     answer: str        # the chosen option id
 
 
+class HintRequest(BaseModel):
+    text: str          # free-text user suggestion/preference
+
+
 # ── POST /analyse ─────────────────────────────────────────────────────────────
 
 @router.post("/analyse")
@@ -156,6 +160,51 @@ async def submit_answer(session_id: str, req: AnswerRequest):
 
     session.resolve_user_answer(req.answer)
     return {"status": "ok", "answer_received": req.answer}
+
+
+# ── POST /analyse/{id}/hint ───────────────────────────────────────────────────
+
+@router.post("/analyse/{session_id}/hint")
+async def submit_hint(session_id: str, req: HintRequest):
+    """
+    Accept a free-text user hint during (or before) pipeline execution.
+
+    The hint is stored on the MessageBus in an isolated _user_hints list —
+    completely separate from agent memory and the SSE message stream.
+    Agents read it only at two safe injection points:
+      1. Strategist.plan()  — shapes which analyses are prioritised
+      2. ArchitectAgent.design() — shapes tab naming and layout narrative
+
+    A system log is also posted so the hint appears visibly in the agent
+    progress feed as a "💬 User hint" entry.
+    """
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Hint text cannot be empty")
+
+    if len(text) > 500:
+        raise HTTPException(status_code=400, detail="Hint too long (max 500 characters)")
+
+    # Store on bus — isolated from agent memory
+    session.bus.add_hint(text)
+
+    # Post a visible system log so it appears in the agent feed
+    session.bus.post_log(
+        "system",
+        f"💬 User hint: {text}",
+        {"hint_type": "user_suggestion"},
+    )
+
+    return {
+        "status": "ok",
+        "hint_received": text,
+        "hint_count": len(session.bus.get_hints()),
+        "pipeline_status": session.status,
+    }
 
 
 # ── GET /download/{session_id}/{name} ─────────────────────────────────────────

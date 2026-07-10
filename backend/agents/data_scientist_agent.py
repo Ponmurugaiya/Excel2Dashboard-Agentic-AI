@@ -10,6 +10,7 @@ Real agent loop:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import textwrap
 from typing import Any
@@ -38,6 +39,7 @@ class DataScientistAgent(BaseAgent):
         super().__init__(bus, mode)
         self._tasks: list[AnalysisTask] = []
         self._results: list[dict] = []
+        self._results_lock = asyncio.Lock()  # guard concurrent appends
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -52,11 +54,19 @@ class DataScientistAgent(BaseAgent):
         self.memory.set("columns", list(df.columns))
         self.memory.set("shape", {"rows": len(df), "cols": len(df.columns)})
 
-        for task in tasks:
+        # Run all tasks concurrently — each is CPU-light (LLM call + sandbox exec).
+        # This is the biggest latency win: 6 tasks × ~15s serial → ~15s total parallel.
+        # We cap concurrency at 4 to avoid overwhelming the LLM rate limits.
+        semaphore = asyncio.Semaphore(4)
+
+        async def run_with_sem(task: AnalysisTask):
             if task.status == "skipped":
-                continue
-            self.log(f"Starting analysis: {task.name}")
-            await self._run_task(df, task, profile)
+                return
+            async with semaphore:
+                self.log(f"Starting analysis: {task.name}")
+                await self._run_task(df, task, profile)
+
+        await asyncio.gather(*[run_with_sem(t) for t in tasks])
 
         self.mark_done()
         return self._results
@@ -106,14 +116,15 @@ class DataScientistAgent(BaseAgent):
                         "code":      code,
                     },
                 ))
-                self._results.append({
-                    "task_id":   task.id,
-                    "task_name": task.name,
-                    "pattern":   task.pattern,
-                    "columns":   task.columns,
-                    "result":    result.data,
-                    "code":      code,
-                })
+                async with self._results_lock:
+                    self._results.append({
+                        "task_id":   task.id,
+                        "task_name": task.name,
+                        "pattern":   task.pattern,
+                        "columns":   task.columns,
+                        "result":    result.data,
+                        "code":      code,
+                    })
                 return
 
             # Failure — log and loop (no user escalation)
@@ -213,7 +224,9 @@ The function must start with `def run(df):` on the first line.
 
         try:
             from backend.llm.client import llm_code
-            raw = llm_code(prompt)
+            # Run synchronous LLM call in a thread so concurrent tasks
+            # don't block each other's event loop during the HTTP round-trip
+            raw = await asyncio.to_thread(llm_code, prompt)
 
             # Verify it contains a run function — if not, wrap it
             import re as re_module

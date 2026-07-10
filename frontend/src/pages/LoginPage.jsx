@@ -59,7 +59,7 @@ export default function LoginPage({ onAuth, onSkip }) {
     <div className="min-h-screen flex">
 
       {/* ── Left panel — branding ──────────────────────────────────────── */}
-      <div className="hidden lg:flex lg:w-[55%] bg-gradient-brand relative overflow-hidden flex-col justify-between p-12">
+      <div className="hidden lg:flex lg:w-[55%] bg-gradient-brand relative overflow-hidden flex-col justify-center p-12">
         <div className="absolute inset-0 bg-gradient-mesh opacity-40 pointer-events-none" />
 
         {/* Logo */}
@@ -100,9 +100,6 @@ export default function LoginPage({ onAuth, onSkip }) {
           </div>
         </div>
 
-        <p className="relative z-10 text-white/40 text-xs">
-          © {new Date().getFullYear()} AI BI Dashboard Builder
-        </p>
       </div>
 
       {/* ── Right panel — form ─────────────────────────────────────────── */}

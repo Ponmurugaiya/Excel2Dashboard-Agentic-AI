@@ -21,6 +21,11 @@ class MessageBus:
         self._pending_user_question: Message | None = None
         self._user_response_event: asyncio.Event = asyncio.Event()
         self._user_response_value: str | None = None
+        # ── User hints — isolated from agent memory ───────────────────────────
+        # Plain strings written by the user during the analysis run.
+        # Only read at explicit injection points (Strategist, Architect).
+        # Never written into any AgentMemory or MessageBus._messages.
+        self._user_hints: list[str] = []
 
     # ── Post ─────────────────────────────────────────────────────────────────
 
@@ -109,6 +114,26 @@ class MessageBus:
 
     def is_waiting_for_user(self) -> bool:
         return self._pending_user_question is not None
+
+    # ── User hints ────────────────────────────────────────────────────────────
+    # Hints are intentionally NOT posted to _messages so they never appear in
+    # agent decision logs or SSE streams as agent messages.  They are only
+    # surfaced at the two injection points: Strategist.plan() and
+    # ArchitectAgent.design().  The API layer also broadcasts a system log so
+    # the hint is visible in the agent feed as a user action, not an agent action.
+
+    def add_hint(self, text: str) -> None:
+        """Store a user hint. Thread-safe for concurrent async tasks."""
+        stripped = text.strip()
+        if stripped:
+            self._user_hints.append(stripped)
+
+    def get_hints(self) -> list[str]:
+        """Return a snapshot of all hints received so far."""
+        return list(self._user_hints)
+
+    def has_hints(self) -> bool:
+        return bool(self._user_hints)
 
     # ── Subscribe ─────────────────────────────────────────────────────────────
 

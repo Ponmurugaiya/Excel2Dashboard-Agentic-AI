@@ -88,8 +88,9 @@ _TASK_CHAINS: dict[TaskType, list[str]] = {
     "planning":  ["gemini-2.5-flash", "qwen3-32b",    "qwen3.6-27b",  "llama-3.3-70b"],
     # Qwen3-32B is excellent at strict JSON output
     "json":      ["qwen3-32b",        "qwen3.6-27b",  "llama-3.3-70b", "gemini-2.5-flash"],
-    # Qwen3.6-27B strong at code generation
-    "code":      ["qwen3.6-27b",      "qwen3-32b",    "llama-3.3-70b", "gemini-2.5-flash"],
+    # llama-3.3-70b first for code — fast, no thinking overhead, reliable run() output.
+    # Qwen3 models as fallback — strong but add 5-15s thinking latency per call.
+    "code":      ["llama-3.3-70b",    "qwen3.6-27b",  "qwen3-32b",    "gemini-2.5-flash"],
     # Llama models only for classify — fast, no thinking overhead
     "classify":  ["llama-3.1-8b",     "llama-3.3-70b"],
     # Llama-3.3-70B is strong at conversational / chat tasks
@@ -98,13 +99,13 @@ _TASK_CHAINS: dict[TaskType, list[str]] = {
 
 # Minimum token budget for models that use extended thinking.
 # Without enough tokens the thinking block consumes the budget before the answer.
-_MIN_TOKENS_THINKING = 512   # applied to qwen3-* models when caller requests < this
+_MIN_TOKENS_THINKING = 1024   # raised: 512 was too small — thinking consumed all tokens
 _THINKING_MODELS = {"qwen3-32b", "qwen3.6-27b"}
 
 
 # ── Per-model exhaustion tracker ──────────────────────────────────────────────
 
-COOLDOWN_SECONDS = 60 * 10   # 10 minutes before retrying an exhausted model
+COOLDOWN_SECONDS = 60 * 3    # 3 minutes — short enough to recover within a single run
 
 @dataclass
 class _ModelState:
@@ -143,6 +144,10 @@ def llm_call(
     Make an LLM call routed by task type.
     Automatically falls back through the model chain on quota errors.
     Returns raw text response.
+
+    This is a synchronous function. When called from async code that runs
+    multiple tasks concurrently, wrap with asyncio.to_thread() to prevent
+    blocking the event loop during the HTTP round-trip.
     """
     chain = _TASK_CHAINS.get(task, _TASK_CHAINS["json"])
     last_err = None
@@ -173,6 +178,13 @@ def llm_call(
             # Success — log which model was used if it's not the first in chain
             if model_name != chain[0]:
                 print(f"[LLM] task={task} using fallback: {model_name}")
+
+            # Guard against empty response (can happen when thinking tokens
+            # consume the entire budget — treat as a quota-style soft failure)
+            if not result or not result.strip():
+                print(f"[LLM] {model_name} returned empty response — trying next")
+                continue
+
             return result
 
         except Exception as e:

@@ -30,7 +30,13 @@ export default function App() {
     setFilePath(path);
     setRunMode(mode);
     setError(null);
+    setSessionId(null);   // reset — AnalysisPage will set it via onSessionStart
     setScreen(SCREEN.ANALYSIS);
+  };
+
+  // Called by AnalysisPage as soon as the backend session is created
+  const handleSessionStart = (sid) => {
+    setSessionId(sid);
   };
 
   const handleDone = (sid, dashSpec, dlList, evtList) => {
@@ -101,6 +107,7 @@ export default function App() {
           <AnalysisPage
             filePath={filePath}
             mode={runMode}
+            onSessionStart={handleSessionStart}
             onDone={handleDone}
             onError={handleError}
           />

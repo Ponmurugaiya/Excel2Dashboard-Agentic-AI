@@ -186,3 +186,36 @@ class BaseAgent:
         """Call LLM for code generation. Uses the 'code' task chain."""
         from backend.llm.client import llm_code
         return llm_code(prompt)
+
+    # ── LLM helpers — task-routed, per-model quota fallback ──────────────────
+    # Sync versions for simple one-off calls.
+    # Async versions run the blocking HTTP call in a thread pool so concurrent
+    # agent tasks don't stall the event loop waiting for each other.
+
+    def _llm_json(self, prompt: str, task: str = "json") -> dict | list:
+        from backend.llm.client import llm_json
+        return llm_json(prompt, task=task)
+
+    async def _llm_json_async(self, prompt: str, task: str = "json") -> dict | list:
+        import asyncio as _aio
+        from backend.llm.client import llm_json
+        return await _aio.to_thread(llm_json, prompt, task=task)
+
+    def _llm_text(self, prompt: str, system: str = None, task: str = "chat") -> str:
+        from backend.llm.client import llm_call
+        kw: dict = {"task": task}
+        if system:
+            kw["system"] = system
+        return llm_call(prompt, **kw)
+
+    async def _llm_text_async(self, prompt: str, system: str = None, task: str = "chat") -> str:
+        import asyncio as _aio
+        from backend.llm.client import llm_call
+        kw: dict = {"task": task}
+        if system:
+            kw["system"] = system
+        return await _aio.to_thread(llm_call, prompt, **kw)
+
+    def _llm_code(self, prompt: str) -> str:
+        from backend.llm.client import llm_code
+        return llm_code(prompt)

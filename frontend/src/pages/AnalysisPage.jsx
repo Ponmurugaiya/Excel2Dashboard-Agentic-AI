@@ -4,8 +4,9 @@ import {
   Wand2, BarChart3, Lightbulb, Layers, Sparkles,
 } from "lucide-react";
 import { analyseAPI } from "../lib/api";
-import AgentProgressFeed from "../components/AgentProgressFeed";
-import AgentQuestionCard from "../components/AgentQuestionCard";
+import AgentProgressFeed  from "../components/AgentProgressFeed";
+import AgentQuestionCard  from "../components/AgentQuestionCard";
+import ChatPanel          from "../components/ChatPanel";
 
 /* ── Pipeline stages ─────────────────────────────────────────────────────── */
 const STAGES = [
@@ -24,7 +25,7 @@ function stageIndex(status) {
   return i === -1 ? -1 : i;
 }
 
-export default function AnalysisPage({ filePath, mode, onDone, onError }) {
+export default function AnalysisPage({ filePath, mode, onSessionStart, onDone, onError }) {
   const [events, setEvents]       = useState([]);
   const [status, setStatus]       = useState("created");
   const [question, setQuestion]   = useState(null);
@@ -41,6 +42,7 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
         const res = await analyseAPI.start(filePath, mode);
         const sid = res.data.session_id;
         setSessionId(sid);
+        onSessionStart?.(sid);   // tell App so hint panel can call API immediately
 
         const es = new EventSource(`/analyse/${sid}/events`);
         esRef.current = es;
@@ -68,16 +70,54 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
               return;
             }
 
-            if (msg.type === "log" && msg.from === "system") {
-              const text = msg.payload?.text || "";
-              if (text.includes("Parsing") || text.includes("parsing"))  setStatus("parsing");
-              else if (text.includes("Cleaning"))  setStatus("cleaning");
-              else if (text.includes("planning") || text.includes("Planning")) setStatus("planning");
-              else if (text.includes("analy"))     setStatus("analysing");
-              else if (text.includes("insight"))   setStatus("insight");
-              else if (text.includes("Design") || text.includes("Building")) setStatus("designing");
-              else if (text.includes("ready") || text.includes("Done"))  setStatus("done");
+            // ── Stage detection — match on ALL logs, any sender ────────────
+            if (msg.type === "log" || msg.type === "auto_decision") {
+              const from = (msg.from || "").toLowerCase();
+              const text = (msg.payload?.text || msg.payload?.context || "").toLowerCase();
+
+              // Map exact agent names (from AgentName enum) → stage
+              // "Cleaner" → cleaning
+              // "Strategist" → planning
+              // "Data Scientist" → analysing
+              // "Quality" → analysing
+              // "Insight" → insight
+              // "Dashboard Architect" → designing
+              if (from === "cleaner") {
+                setStatus("cleaning");
+              } else if (from === "strategist") {
+                setStatus("planning");
+              } else if (from === "data scientist" || from === "quality") {
+                setStatus("analysing");
+              } else if (from === "insight") {
+                setStatus("insight");
+              } else if (from === "dashboard architect") {
+                setStatus("designing");
+              }
+
+              // Text-based fallback — works for system messages and
+              // any agent whose name doesn't match exactly
+              if (from === "system") {
+                if (text.includes("file parsed") || text.includes("parsing")) {
+                  setStatus("parsing");
+                }
+              }
+              if (text.includes("cleaning complete")) {
+                setStatus("planning");
+              }
+              if (text.includes("starting analysis:") || text.includes("writing code for")) {
+                setStatus("analysing");
+              }
+              if (text.includes("analysing") && text.includes("results for insights")) {
+                setStatus("insight");
+              }
+              if (text.includes("designing dashboard for") || text.includes("planned") && text.includes("dashboard tab")) {
+                setStatus("designing");
+              }
+              if (text.includes("dashboard design complete") || text.includes("dashboard ready")) {
+                setStatus("done");
+              }
             }
+            // ── End stage detection ────────────────────────────────────────
 
             setEvents((prev) => {
               const next = [...prev, msg];
@@ -239,6 +279,11 @@ export default function AnalysisPage({ filePath, mode, onDone, onError }) {
           onAnswer={handleAnswer}
           loading={answering}
         />
+      )}
+
+      {/* ── Hint panel — available as soon as session exists ──────────────── */}
+      {sessionId && !isDone && !isError && (
+        <ChatPanel mode="hint" sessionId={sessionId} />
       )}
     </div>
   );

@@ -51,7 +51,7 @@ class InsightAgent(BaseAgent):
         self.memory.set("results_index", {r.task_id: r for r in accepted_results})
 
         # ── Tool: LLM-powered insight generation ─────────────────────────────
-        raw_insights = self._generate_insights_llm(accepted_results)
+        raw_insights = await self._generate_insights_llm(accepted_results)
         self.memory.remember("raw_insights", {"count": len(raw_insights)})
 
         # ── Tool: cross-reference for compound insights ───────────────────────
@@ -72,7 +72,7 @@ class InsightAgent(BaseAgent):
 
     # ── Tool: LLM insight generation ─────────────────────────────────────────
 
-    def _generate_insights_llm(self, results: list[AnalysisResult]) -> list[dict]:
+    async def _generate_insights_llm(self, results: list[AnalysisResult]) -> list[dict]:
         """Call LLM with all results to generate data-grounded insights."""
 
         results_summary = []
@@ -134,7 +134,7 @@ Rules:
 - Return ONLY the JSON array
 """
         try:
-            raw = self._llm_json(prompt, task="json")
+            raw = await self._llm_json_async(prompt, task="json")
             if isinstance(raw, list):
                 return raw
             return raw.get("insights", [])

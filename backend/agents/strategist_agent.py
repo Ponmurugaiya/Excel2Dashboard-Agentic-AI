@@ -53,7 +53,7 @@ class StrategistAgent(BaseAgent):
         self.memory.set("dataset_context", context)
 
         # ── Tool: LLM-powered task proposal ──────────────────────────────────
-        tasks = self._propose_tasks(context, profile)
+        tasks = await self._propose_tasks(context, profile)
         self.log(
             f"Identified {len(tasks)} analysis opportunities",
             {"tasks": [t.name for t in tasks]},
@@ -188,10 +188,18 @@ class StrategistAgent(BaseAgent):
 
     # ── Tool: LLM task proposal ───────────────────────────────────────────────
 
-    def _propose_tasks(self, context: dict, profile: dict) -> list[AnalysisTask]:
+    async def _propose_tasks(self, context: dict, profile: dict) -> list[AnalysisTask]:
         """Use LLM to propose analysis tasks based on detected context."""
 
         profile_summary = self._format_profile_summary(profile)
+
+        # Collect user hints from the bus — read-only, never mutated here
+        hints = self.bus.get_hints()
+        hints_block = ""
+        if hints:
+            hints_block = "\nUSER PREFERENCES (soft guidance — honour where data permits):\n"
+            hints_block += "\n".join(f"  - {h}" for h in hints)
+            hints_block += "\n"
 
         prompt = f"""You are a senior data analyst planning a BI dashboard.
 
@@ -200,7 +208,7 @@ DATASET CONTEXT:
 
 COLUMN DETAILS:
 {profile_summary}
-
+{hints_block}
 Based on this dataset, propose the most valuable analysis tasks.
 
 For each task, identify:
@@ -222,11 +230,12 @@ RULES:
 - Maximum 6 tasks total
 - Prioritise tasks that answer "how is the business performing?" first
 - Do NOT skip RFM or cohort just because the dataset is small — they are valuable even on sample data
+- If user preferences mention a specific dimension (e.g. geography, product), boost that task's priority
 
 Return a JSON array of task objects. Nothing else.
 """
         try:
-            raw = self._llm_json(prompt, task="planning")
+            raw = await self._llm_json_async(prompt, task="planning")
             tasks = []
             for item in (raw if isinstance(raw, list) else raw.get("tasks", [])):
                 tasks.append(AnalysisTask(

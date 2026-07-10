@@ -64,7 +64,7 @@ class ArchitectAgent(BaseAgent):
             result.chart_spec = self._build_chart_spec(result)
 
         # ── Tool: design narrative flow (LLM) ─────────────────────────────────
-        tab_plan = self._plan_tabs_llm(ranked, insights, dataset_title)
+        tab_plan = await self._plan_tabs_llm(ranked, insights, dataset_title)
         self.memory.remember("tab_plan", {"tabs": [t["label"] for t in tab_plan]})
         self.log(f"Planned {len(tab_plan)} dashboard tabs: {[t['label'] for t in tab_plan]}")
 
@@ -114,7 +114,7 @@ class ArchitectAgent(BaseAgent):
 
     # ── Tool: plan tabs via LLM ───────────────────────────────────────────────
 
-    def _plan_tabs_llm(
+    async def _plan_tabs_llm(
         self,
         results: list[AnalysisResult],
         insights: list[dict],
@@ -135,6 +135,14 @@ class ArchitectAgent(BaseAgent):
 
         top_insights = [i.get("text", "")[:120] for i in insights[:3]]
 
+        # Collect user hints — read-only, never written to agent memory
+        hints = self.bus.get_hints()
+        hints_block = ""
+        if hints:
+            hints_block = "\nUSER PREFERENCES (apply where sensible — name tabs accordingly):\n"
+            hints_block += "\n".join(f"  - {h}" for h in hints)
+            hints_block += "\n"
+
         prompt = f"""You are designing a BI dashboard layout.
 
 DATASET TITLE: {dataset_title}
@@ -144,7 +152,7 @@ AVAILABLE ANALYSES:
 
 TOP INSIGHTS:
 {json.dumps(top_insights, indent=2)}
-
+{hints_block}
 Design the tab structure for this dashboard.
 
 Rules:
@@ -153,6 +161,7 @@ Rules:
 - Group related analyses together
 - Tab names should be business-friendly (not technical)
 - Every analysis must be assigned to exactly one tab
+- If user preferences mention a specific focus area, name tabs or lead with that topic
 
 Return a JSON array:
 [
@@ -168,7 +177,7 @@ Return a JSON array:
 Return ONLY the JSON array.
 """
         try:
-            raw = self._llm_json(prompt, task="planning")
+            raw = await self._llm_json_async(prompt, task="planning")
             if isinstance(raw, list) and raw:
                 return raw
         except Exception as e:
